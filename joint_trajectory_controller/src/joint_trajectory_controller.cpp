@@ -824,8 +824,15 @@ JointTrajectoryController::on_deactivate(const rclcpp_lifecycle::State &)
   // TODO(anyone): How to halt when using effort commands?
   for (auto index = 0ul; index < joint_names_.size(); ++index)
   {
-    joint_command_interface_[0][index].get().set_value(
-      joint_command_interface_[0][index].get().get_value());
+    if (has_position_command_interface_)
+    {
+      joint_command_interface_[0][index].get().set_value(
+        joint_command_interface_[0][index].get().get_value());
+    }
+    if (has_effort_command_interface_)
+    {
+      joint_command_interface_[3][index].get().set_value(0.0);
+    }
   }
 
   for (auto index = 0ul; index < allowed_interface_types_.size(); ++index)
