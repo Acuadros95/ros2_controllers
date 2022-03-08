@@ -141,11 +141,9 @@ protected:
   bool has_position_command_interface_ = false;
   bool has_velocity_command_interface_ = false;
   bool has_acceleration_command_interface_ = false;
+  bool has_effort_command_interface_ = false;
 
   /// If true, a velocity feedforward term plus corrective PID term is used
-  // TODO(anyone): This flag is not used for now
-  // There should be PID-approach used as in ROS1:
-  // https://github.com/ros-controls/ros_controllers/blob/noetic-devel/joint_trajectory_controller/include/joint_trajectory_controller/hardware_interface_adapter.h#L283
   bool use_closed_loop_pid_adapter = false;
   using PidPtr = std::shared_ptr<control_toolbox::Pid>;
   std::vector<PidPtr> pids_;
@@ -241,6 +239,9 @@ protected:
   bool read_state_from_command_interfaces(JointTrajectoryPoint & state);
 
 private:
+  // TODO(acuadros95): Check when https://github.com/ros-controls/ros2_controllers/issues/85 is solved
+  double calculate_signed_diff(double origin, double target);
+
   bool contains_interface_type(
     const std::vector<std::string> & interface_type_list, const std::string & interface_type);
 

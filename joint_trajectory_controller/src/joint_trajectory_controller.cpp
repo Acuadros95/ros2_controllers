@@ -22,6 +22,7 @@
 #include <ratio>
 #include <string>
 #include <vector>
+#include <cmath>
 
 #include "angles/angles.h"
 #include "builtin_interfaces/msg/duration.hpp"
@@ -195,35 +196,58 @@ controller_interface::return_type JointTrajectoryController::update(
       {
         assign_interface_from_point(joint_command_interface_[0], state_desired.positions);
       }
-      if (has_velocity_command_interface_)
+
+      if (use_closed_loop_pid_adapter)
       {
-        if (!use_closed_loop_pid_adapter)
+        // Calculate and set closed loop commands
+        for (auto i = 0ul; i < joint_num; ++i)
+        {
+          double pos_error = calculate_signed_diff(state_current.positions[i] , state_desired.positions[i]);
+          double vel_error = state_desired.velocities[i] - state_current.velocities[i];
+
+          // Add error tolerance
+          if (pos_error > 0.025 || vel_error != 0.0)
+          {
+            tmp_command_[i] += (state_desired.velocities[i] * ff_velocity_scale_[i]) +
+                            pids_[i]->computeCommand(
+                              pos_error,
+                              vel_error,
+                              (uint64_t)period.nanoseconds());
+
+            // TODO(acuadros95): Check if parameter fix this Control output saturation
+            /*
+            if (abs(tmp_command_[i]) > 100) {
+              tmp_command_[i] = tmp_command_[i] > 0 ? 100 : -100;
+            }
+            */
+          }
+        }
+
+        if (has_velocity_command_interface_)
+        {
+            assign_interface_from_point(joint_command_interface_[1], tmp_command_);
+        }
+        if (has_effort_command_interface_)
+        {
+            assign_interface_from_point(joint_command_interface_[3], tmp_command_);
+        }
+      }
+      else
+      {
+        // Set open loop commands
+        if (has_velocity_command_interface_)
         {
           assign_interface_from_point(joint_command_interface_[1], state_desired.velocities);
         }
-        else
+        if (has_acceleration_command_interface_)
         {
-          // Update PIDs
-          for (auto i = 0ul; i < joint_num; ++i)
-          {
-            tmp_command_[i] = (state_desired.velocities[i] * ff_velocity_scale_[i]) +
-                              pids_[i]->computeCommand(
-                                state_desired.positions[i] - state_current.positions[i],
-                                state_desired.velocities[i] - state_current.velocities[i],
-                                (uint64_t)period.nanoseconds());
-          }
-          assign_interface_from_point(joint_command_interface_[1], tmp_command_);
+          assign_interface_from_point(joint_command_interface_[2], state_desired.accelerations);
+        }
+        if (has_effort_command_interface_)
+        {
+          assign_interface_from_point(joint_command_interface_[3], state_desired.effort);
         }
       }
-      if (has_acceleration_command_interface_)
-      {
-        assign_interface_from_point(joint_command_interface_[2], state_desired.accelerations);
-      }
-      // TODO(anyone): Add here "if using_closed_loop_hw_interface_adapter" (see ROS1) - #171
-      //       if (check_if_interface_type_exist(
-      //           command_interface_types_, hardware_interface::HW_IF_EFFORT)) {
-      //         assign_interface_from_point(joint_command_interface_[3], state_desired.effort);
-      //       }
 
       for (size_t index = 0; index < joint_num; ++index)
       {
@@ -505,6 +529,8 @@ CallbackReturn JointTrajectoryController::on_configure(const rclcpp_lifecycle::S
     contains_interface_type(command_interface_types_, hardware_interface::HW_IF_VELOCITY);
   has_acceleration_command_interface_ =
     contains_interface_type(command_interface_types_, hardware_interface::HW_IF_ACCELERATION);
+  has_effort_command_interface_ =
+    contains_interface_type(command_interface_types_, hardware_interface::HW_IF_EFFORT);
 
   if (has_velocity_command_interface_)
   {
@@ -532,8 +558,7 @@ CallbackReturn JointTrajectoryController::on_configure(const rclcpp_lifecycle::S
     return CallbackReturn::FAILURE;
   }
 
-  // TODO(livanov93): change when other option is implemented
-  if (has_velocity_command_interface_ && use_closed_loop_pid_adapter)
+  if ((has_velocity_command_interface_ && use_closed_loop_pid_adapter) || has_effort_command_interface_)
   {
     size_t num_joints = joint_names_.size();
     pids_.resize(num_joints);
@@ -595,7 +620,7 @@ CallbackReturn JointTrajectoryController::on_configure(const rclcpp_lifecycle::S
 
   if (has_velocity_state_interface_)
   {
-    if (!contains_interface_type(state_interface_types_, hardware_interface::HW_IF_POSITION))
+    if (!has_position_state_interface_)
     {
       RCLCPP_ERROR(
         logger,
@@ -604,13 +629,33 @@ CallbackReturn JointTrajectoryController::on_configure(const rclcpp_lifecycle::S
       return CallbackReturn::FAILURE;
     }
   }
-  else if (has_acceleration_state_interface_)
+  else
   {
-    RCLCPP_ERROR(
-      logger,
-      "'acceleration' state interface cannot be used if 'position' and 'velocity' "
-      "interfaces are not present.");
-    return CallbackReturn::FAILURE;
+    if (has_acceleration_state_interface_)
+    {
+      RCLCPP_ERROR(
+        logger,
+        "'acceleration' state interface cannot be used if 'position' and 'velocity' "
+        "interfaces are not present.");
+      return CallbackReturn::FAILURE;
+    }
+    if (has_velocity_command_interface_ && command_interface_types_.size() == 1)
+    {
+      RCLCPP_ERROR(
+        logger,
+        "'velocity' command interface can only be used alone if 'velocity' and "
+        "'position' state interfaces are present");
+      return CallbackReturn::FAILURE;
+    }
+    // effort is always used alone so no need for size check
+    if (has_effort_command_interface_)
+    {
+      RCLCPP_ERROR(
+        logger,
+        "'effort' command interface can only be used alone if 'velocity' and "
+        "'position' state interfaces are present");
+      return CallbackReturn::FAILURE;
+    }
   }
 
   auto get_interface_list = [](const std::vector<std::string> & interface_types) {
@@ -809,6 +854,11 @@ CallbackReturn JointTrajectoryController::on_deactivate(const rclcpp_lifecycle::
     if (has_velocity_command_interface_)
     {
       joint_command_interface_[1][index].get().set_value(0.0);
+    }
+
+    if (has_effort_command_interface_)
+    {
+      joint_command_interface_[3][index].get().set_value(0.0);
     }
   }
 
@@ -1227,6 +1277,26 @@ void JointTrajectoryController::resize_joint_trajectory_point(
   {
     point.accelerations.resize(size);
   }
+}
+
+double JointTrajectoryController::calculate_signed_diff(double origin, double target)
+{
+  double signed_diff = 0;
+  double raw_diff = origin > target ? origin - target : target - origin;
+  double mod_diff = fmod(raw_diff, M_PI*2);  // Equate rollover (0 == MOTOR_CPR)
+
+  if (mod_diff != 0) {
+    if (mod_diff > (M_PI*2 / 2)) {
+      // There is a shorter path in opposite direction
+      signed_diff = (M_PI*2 - mod_diff);
+      if (target > origin) {signed_diff = signed_diff * -1;}
+    } else {
+      signed_diff = mod_diff;
+      if (origin > target) {signed_diff = signed_diff * -1;}
+    }
+  }
+
+  return signed_diff;
 }
 
 }  // namespace joint_trajectory_controller
