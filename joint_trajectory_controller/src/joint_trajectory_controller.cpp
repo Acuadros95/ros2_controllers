@@ -214,12 +214,10 @@ controller_interface::return_type JointTrajectoryController::update(
                               vel_error,
                               (uint64_t)period.nanoseconds());
 
-            // TODO(acuadros95): Check if parameter fix this Control output saturation
-            /*
+            // TODO(acuadros95): Check if parameter on joint_limits sets this saturation
             if (abs(tmp_command_[i]) > 100) {
               tmp_command_[i] = tmp_command_[i] > 0 ? 100 : -100;
             }
-            */
           }
         }
 
@@ -508,13 +506,7 @@ CallbackReturn JointTrajectoryController::on_configure(const rclcpp_lifecycle::S
   {
     if (command_interface_types_.size() == 1)
     {
-      // TODO(anyone): This flag is not used for now
-      // There should be PID-approach used as in ROS1:
-      // https://github.com/ros-controls/ros_controllers/blob/noetic-devel/joint_trajectory_controller/include/joint_trajectory_controller/hardware_interface_adapter.h#L283
       use_closed_loop_pid_adapter = true;
-      // TODO(anyone): remove the next two lines when implemented
-      RCLCPP_ERROR(logger, "using 'effort' command interface alone is not yet implemented yet.");
-      return CallbackReturn::FAILURE;
     }
     else
     {
